@@ -6,5 +6,5 @@
 export const CONFIG = {
   API_BASE_URL: "http://localhost:8000",
   RAZORPAY_KEY_ID: "rzp_test_xxxxxxxxxxxxxx",
-  USE_MOCK_API: true,
+  USE_MOCK_API: false,
 };

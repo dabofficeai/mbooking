@@ -60,11 +60,18 @@ export const apiClient = {
     });
   },
 
-  async confirmMockPayment(bookingId) {
-    if (!CONFIG.USE_MOCK_API) {
-      throw new Error("Mock payment confirmation is only available in USE_MOCK_API mode.");
+  async confirmFakePayment(bookingId) {
+    if (CONFIG.USE_MOCK_API) {
+      return mockConfirmPayment(bookingId);
     }
-    return mockConfirmPayment(bookingId);
+    return requestJson(
+      `/api/bookings/${encodeURIComponent(bookingId)}/confirm-fake`,
+      { method: "POST" }
+    );
+  },
+
+  async confirmMockPayment(bookingId) {
+    return this.confirmFakePayment(bookingId);
   },
 
   async getBookingStatus(bookingId) {

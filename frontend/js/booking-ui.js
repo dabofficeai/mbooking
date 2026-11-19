@@ -249,14 +249,12 @@ async function handleSubmit() {
   try {
     const booking = await apiClient.createBooking(validation.payload);
 
-    if (apiClient.isMockMode()) {
-      els.payButton.textContent = "Confirming mock payment...";
-      const paid = await apiClient.confirmMockPayment(booking.booking_id);
+    if (apiClient.isMockMode() || booking.gateway_name === "fake") {
+      els.payButton.textContent = "Confirming payment...";
+      const paid = await apiClient.confirmFakePayment(booking.booking_id);
       showReceipt(paid);
       state.clearSelection();
       renderAll();
-    } else if (booking.gateway_name === "fake") {
-      showReceipt(booking);
     } else {
       els.payButton.textContent = "Waiting for Razorpay payment...";
       const finalBooking = await openRazorpayCheckout(

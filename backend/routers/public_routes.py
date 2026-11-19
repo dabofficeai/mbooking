@@ -1,5 +1,6 @@
 from fastapi import APIRouter, Depends, HTTPException, status
 
+from config import Settings, get_settings
 from routers.dependencies import get_booking_service
 from schemas.booking_schema import (
     BookingStatusResponse,
@@ -42,6 +43,31 @@ def create_booking(
     except BookingValidationError as exc:
         raise HTTPException(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=str(exc),
+        ) from exc
+
+
+@router.post("/bookings/{booking_id}/confirm-fake", response_model=BookingStatusResponse)
+def confirm_fake_booking(
+    booking_id: str,
+    service: BookingService = Depends(get_booking_service),
+    settings: Settings = Depends(get_settings),
+) -> BookingStatusResponse:
+    if settings.PAYMENT_PROVIDER != "fake":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Fake payment confirmation is disabled when PAYMENT_PROVIDER is not 'fake'.",
+        )
+    try:
+        return service.confirm_fake_payment(booking_id)
+    except BookingNotFoundError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(exc),
+        ) from exc
+    except BookingValidationError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
             detail=str(exc),
         ) from exc
 

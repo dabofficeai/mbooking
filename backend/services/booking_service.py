@@ -149,6 +149,20 @@ class BookingService:
             items=[BookingItemResponse.model_validate(i) for i in booking.items],
         )
 
+    def confirm_fake_payment(self, booking_id: str) -> BookingStatusResponse:
+        booking = self.repo.get_by_id(booking_id)
+        if not booking:
+            raise BookingNotFoundError(f"Booking {booking_id} not found.")
+        if booking.gateway_name != "fake":
+            raise BookingValidationError(
+                "Fake payment confirmation is only allowed for fake gateway bookings."
+            )
+        if booking.status != BookingStatus.PAID.value:
+            booking = self.repo.mark_paid(
+                booking, f"pay_fake_{booking.id[:12]}"
+            )
+        return self.get_booking_status(booking.id)
+
     def handle_razorpay_webhook(
         self, raw_body: bytes, signature: str
     ) -> dict[str, str]:

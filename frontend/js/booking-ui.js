@@ -213,8 +213,23 @@ function openRazorpayCheckout(booking, customerName, customerPhone) {
         contact: customerPhone,
       },
       theme: { color: "#4f46e5" },
-      handler: async () => {
+      handler: async (response) => {
         try {
+          const verifyUrl = `${CONFIG.API_BASE_URL.replace(/\/$/, "")}/api/bookings/verify-payment`;
+          const res = await fetch(verifyUrl, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              booking_id: booking.booking_id,
+              razorpay_order_id: response.razorpay_order_id,
+              razorpay_payment_id: response.razorpay_payment_id,
+              razorpay_signature: response.razorpay_signature,
+            }),
+          });
+          if (res.ok) {
+            resolve(await res.json());
+            return;
+          }
           const finalStatus = await pollForPaidStatus(booking.booking_id);
           resolve(finalStatus);
         } catch (err) {

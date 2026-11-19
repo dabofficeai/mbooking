@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Admin Schedule — Daily Item Booking</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    @media print {
+      .no-print { display: none !important; }
+      body { background: #ffffff !important; }
+    }
+  </style>
+</head>
+<body class="min-h-screen bg-slate-50 text-slate-900 antialiased">
+  <header class="border-b border-slate-200 bg-white no-print">
+    <div class="mx-auto flex max-w-5xl flex-wrap items-center justify-between gap-3 px-4 py-4">
+      <div>
+        <h1 class="text-xl font-bold tracking-tight text-slate-900">Admin Operations Schedule</h1>
+        <p class="text-xs text-slate-500">Confirmed (PAID) orders grouped chronologically by service date</p>
+      </div>
+      <div class="flex items-center gap-2">
+        <span id="admin-mock-badge" class="hidden rounded-full bg-purple-100 px-2.5 py-1 text-xs font-semibold text-purple-800">
+          Standalone Mock Mode
+        </span>
+        <a href="index.html" class="rounded-lg border border-slate-200 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-100">
+          ← Booking Page
+        </a>
+      </div>
+    </div>
+  </header>
+
+  <main class="mx-auto max-w-5xl px-4 py-6 space-y-5">
+    <!-- Filter & Action Bar -->
+    <section class="flex flex-wrap items-end justify-between gap-3 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm no-print">
+      <div class="flex flex-wrap items-end gap-3">
+        <div>
+          <label for="filter-start-date" class="block text-xs font-medium text-slate-600 mb-1">From Date</label>
+          <input id="filter-start-date" type="date" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" />
+        </div>
+        <div>
+          <label for="filter-end-date" class="block text-xs font-medium text-slate-600 mb-1">To Date</label>
+          <input id="filter-end-date" type="date" class="rounded-lg border border-slate-300 px-3 py-1.5 text-sm" />
+        </div>
+        <button id="refresh-btn" type="button" class="rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800">
+          Apply / Refresh
+        </button>
+      </div>
+
+      <div class="flex items-center gap-2">
+        <button id="print-btn" type="button" class="rounded-lg border border-slate-300 bg-white px-3.5 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+          Print Sheet
+        </button>
+        <button id="csv-btn" type="button" class="rounded-lg bg-indigo-600 px-3.5 py-2 text-xs font-semibold text-white hover:bg-indigo-700">
+          Download CSV
+        </button>
+      </div>
+    </section>
+
+    <div id="admin-summary-bar" class="rounded-xl border border-slate-200 bg-white px-4 py-3 text-sm text-slate-600 shadow-sm">
+      Loading summary...
+    </div>
+
+    <div id="admin-error-box" class="hidden rounded-xl border border-red-200 bg-red-50 p-4 text-sm text-red-700"></div>
+
+    <div id="schedule-container" class="space-y-4"></div>
+  </main>
+
+  <script type="module" src="./js/admin-ui.js"></script>
+</body>
+</html>

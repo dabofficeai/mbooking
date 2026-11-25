@@ -4,7 +4,7 @@
  * without running the FastAPI backend.
  */
 export const CONFIG = {
-  API_BASE_URL: "http://localhost:8000",
-  RAZORPAY_KEY_ID: "rzp_test_xxxxxxxxxxxxxx",
+  API_BASE_URL: "https://mbooking-api-zc3h.onrender.com",
+  RAZORPAY_KEY_ID: "rzp_test_U1wh3T2FIuDEqt",
   USE_MOCK_API: false,
 };

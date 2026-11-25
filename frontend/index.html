@@ -3,12 +3,11 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Daily Item Booking — ₹100/Day</title>
+  <title>Mass Booking</title>
   <script src="https://cdn.tailwindcss.com"></script>
   <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 </head>
 <body class="min-h-screen bg-slate-50 text-slate-900 antialiased">
-  <!-- Cold-start server wake-up banner -->
   <div id="cold-start-banner" class="hidden border-b border-amber-200 bg-amber-50 px-4 py-2 text-center text-xs font-medium text-amber-800">
     <span id="cold-start-text">Waking up free cloud server (~30s on first load)...</span>
   </div>
@@ -16,8 +15,8 @@
   <header class="border-b border-slate-200 bg-white">
     <div class="mx-auto flex max-w-5xl items-center justify-between px-4 py-4">
       <div>
-        <h1 class="text-xl font-bold tracking-tight text-slate-900">Daily Item Booking</h1>
-        <p class="text-xs text-slate-500">Pick 1 or more days in the next 30 days · Flat ₹100/day</p>
+        <h1 class="text-xl font-bold tracking-tight text-slate-900">Mass Booking</h1>
+        <p class="text-xs text-slate-500">Select dates &amp; Holy Mass timings over the next 30 days</p>
       </div>
       <div class="flex items-center gap-3">
         <span id="mock-mode-badge" class="hidden rounded-full bg-purple-100 px-2.5 py-1 text-xs font-semibold text-purple-800">
@@ -34,79 +33,91 @@
     <!-- Receipt / Confirmation Banner -->
     <section id="receipt-section" class="hidden rounded-2xl border border-emerald-200 bg-emerald-50 p-5 shadow-sm">
       <div class="flex items-center justify-between">
-        <h2 class="text-lg font-bold text-emerald-900">Booking Confirmed</h2>
+        <h2 class="text-lg font-bold text-emerald-900">Mass Booking Confirmed</h2>
         <button id="new-booking-btn" type="button" class="rounded-lg bg-emerald-700 px-3 py-1.5 text-xs font-semibold text-white hover:bg-emerald-800">
-          Book More Dates
+          Book More Masses
         </button>
       </div>
+      <p class="mt-1 text-xs text-emerald-800">Please save or screenshot your Booking ID for verification.</p>
       <div id="receipt-content" class="mt-3"></div>
     </section>
 
     <div class="grid grid-cols-1 gap-6 lg:grid-cols-3">
-      <!-- Left: 30-Day Rolling Calendar -->
-      <section class="lg:col-span-2 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
-        <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
-          <div>
-            <h2 class="text-base font-bold text-slate-900">1. Select Dates (Next 30 Days)</h2>
-            <p id="window-range-label" class="text-xs text-slate-500">Loading IST calendar window...</p>
+      <!-- Left: 30-Day Rolling Calendar + Mass Timing Picker -->
+      <div class="lg:col-span-2 space-y-6">
+        <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
+          <div class="flex flex-wrap items-center justify-between gap-2 mb-4">
+            <div>
+              <h2 class="text-base font-bold text-slate-900">1. Select Dates (Next 30 Days)</h2>
+              <p id="window-range-label" class="text-xs text-slate-500">Loading IST calendar window...</p>
+            </div>
+            <div class="flex items-center gap-3 text-[11px]">
+              <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-full bg-rose-400"></span> Sunday</span>
+              <span class="inline-flex items-center gap-1"><span class="h-2.5 w-2.5 rounded-full bg-amber-400"></span> Feast</span>
+              <button id="clear-selection-btn" type="button" class="font-semibold text-slate-500 hover:text-slate-800">
+                Clear all
+              </button>
+            </div>
           </div>
-          <button id="clear-selection-btn" type="button" class="text-xs font-semibold text-slate-500 hover:text-slate-800">
-            Clear selection
-          </button>
-        </div>
-        <div id="calendar-grid" class="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 gap-2.5"></div>
-      </section>
+          <div id="calendar-grid" class="grid grid-cols-3 sm:grid-cols-5 md:grid-cols-6 gap-2.5"></div>
+        </section>
 
-      <!-- Right: Item Mode, Customer Details & Checkout -->
+        <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-3">
+          <h2 class="text-base font-bold text-slate-900">2. Choose Mass Timings</h2>
+          <div id="quick-apply-container" class="hidden rounded-xl border border-indigo-100 bg-indigo-50/40 p-3"></div>
+          <div id="mass-selection-container" class="space-y-3"></div>
+        </section>
+      </div>
+
+      <!-- Right: Mass Intention, Optional Name & Checkout -->
       <aside class="space-y-5">
         <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
           <div class="flex items-center justify-between">
-            <h2 class="text-base font-bold text-slate-900">2. Item Details</h2>
+            <h2 class="text-base font-bold text-slate-900">3. Mass Intention</h2>
             <label class="inline-flex items-center gap-2 cursor-pointer text-xs font-medium text-slate-700">
-              <input id="same-item-toggle" type="checkbox" checked class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
-              Same item for all days
+              <input id="same-intention-toggle" type="checkbox" checked class="h-4 w-4 rounded border-slate-300 text-indigo-600 focus:ring-indigo-500" />
+              Same for all
             </label>
           </div>
 
-          <div id="shared-item-section">
-            <label for="shared-item-input" class="block text-xs font-medium text-slate-600 mb-1">
-              Item / Custom Text (applied to all selected days)
-            </label>
+          <div>
+            <p class="text-[11px] font-medium text-slate-500 mb-1.5">Quick templates (tap to fill):</p>
+            <div id="template-chips" class="flex flex-wrap gap-1.5"></div>
+          </div>
+
+          <div id="shared-intention-section">
+            <div class="flex items-center justify-between mb-1">
+              <label for="shared-intention-input" class="text-xs font-medium text-slate-600">
+                Intention (applied to all selected Masses)
+              </label>
+              <span id="shared-char-count" class="text-[11px] text-slate-400">0/50</span>
+            </div>
             <input
-              id="shared-item-input"
+              id="shared-intention-input"
               type="text"
-              maxlength="100"
-              placeholder="e.g., Filter Coffee Pack"
+              maxlength="50"
+              placeholder="e.g., Departed soul of..."
               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
 
-          <div id="per-day-section" class="hidden space-y-2 max-h-64 overflow-y-auto pr-1">
-            <div id="per-day-list" class="space-y-2"></div>
+          <div id="per-offering-section" class="hidden space-y-2 max-h-72 overflow-y-auto pr-1">
+            <div id="per-offering-list" class="space-y-2"></div>
           </div>
         </section>
 
         <section class="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm space-y-4">
-          <h2 class="text-base font-bold text-slate-900">3. Your Details & Pay</h2>
+          <h2 class="text-base font-bold text-slate-900">4. Offering &amp; Pay</h2>
 
           <div>
-            <label for="customer-name" class="block text-xs font-medium text-slate-600 mb-1">Full Name</label>
+            <label for="customer-name" class="block text-xs font-medium text-slate-600 mb-1">
+              Offered By / Name <span class="text-slate-400">(optional)</span>
+            </label>
             <input
               id="customer-name"
               type="text"
               maxlength="120"
-              placeholder="e.g., Aarav Sharma"
-              class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
-            />
-          </div>
-
-          <div>
-            <label for="customer-phone" class="block text-xs font-medium text-slate-600 mb-1">Phone Number</label>
-            <input
-              id="customer-phone"
-              type="tel"
-              maxlength="20"
-              placeholder="e.g., 9876543210"
+              placeholder="e.g., Riya & Family"
               class="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none focus:ring-1 focus:ring-indigo-500"
             />
           </div>
@@ -114,7 +125,7 @@
           <div class="rounded-xl bg-slate-50 border border-slate-200 p-3 flex items-center justify-between text-sm">
             <div>
               <span class="text-slate-500">Selected:</span>
-              <span id="selected-count" class="font-semibold text-slate-900 ml-1">0 days</span>
+              <span id="selected-count" class="font-semibold text-slate-900 ml-1">0 Masses</span>
             </div>
             <div class="text-base font-bold text-indigo-700" id="total-amount">₹0</div>
           </div>
@@ -126,7 +137,7 @@
             type="button"
             class="w-full rounded-xl bg-indigo-600 px-4 py-3 text-sm font-bold text-white shadow-sm hover:bg-indigo-700 disabled:cursor-not-allowed disabled:opacity-60 transition"
           >
-            Select Dates to Book (₹100/day)
+            Select Date &amp; Mass Timing to Book
           </button>
         </section>
       </aside>

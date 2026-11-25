@@ -2,23 +2,26 @@ from datetime import date, timedelta
 
 from sqlalchemy.orm import Session
 
-from models.booking import Booking, BookingItem, BookingStatus
+from models.booking import (
+    Booking,
+    BookingItem,
+    BookingStatus,
+    MassDateOverride,
+)
 from repositories.booking_repo import BookingRepository
 
 
-def test_multi_user_same_date_inserts_and_chronological_query(
+def test_multi_user_same_mass_inserts_and_chronological_query(
     db_session: Session,
 ) -> None:
     repo = BookingRepository(db_session)
     d1 = date(2026, 11, 20)
     d2 = d1 + timedelta(days=2)
 
-    # User A books d1 and d2 (PAID)
     b1 = Booking(
         id="booking-a",
-        customer_name="Aarav Sharma",
-        customer_phone="9876543210",
-        total_days=2,
+        customer_name="Aarav",
+        total_masses=2,
         total_amount_paise=20000,
         gateway_name="fake",
         gateway_order_id="order_a",
@@ -30,24 +33,29 @@ def test_multi_user_same_date_inserts_and_chronological_query(
             BookingItem(
                 booking_id="booking-a",
                 service_date=d2,
-                item_text="Filter Coffee Pack",
+                mass_time="06:00 AM",
+                mass_language="Telugu",
+                mass_label="06:00 AM (Telugu)",
+                intention_text="Thanksgiving mass",
                 amount_paise=10000,
             ),
             BookingItem(
                 booking_id="booking-a",
                 service_date=d1,
-                item_text="Masala Chai",
+                mass_time="06:00 AM",
+                mass_language="Telugu",
+                mass_label="06:00 AM (Telugu)",
+                intention_text="Departed soul of Joseph",
                 amount_paise=10000,
             ),
         ],
     )
 
-    # User B also books d1 (PAID) - open multi-user capacity
+    # Second devotee books the exact same Mass on d1 (open unlimited capacity)
     b2 = Booking(
         id="booking-b",
-        customer_name="Priya Nair",
-        customer_phone="9123456789",
-        total_days=1,
+        customer_name=None,
+        total_masses=1,
         total_amount_paise=10000,
         gateway_name="fake",
         gateway_order_id="order_b",
@@ -59,18 +67,20 @@ def test_multi_user_same_date_inserts_and_chronological_query(
             BookingItem(
                 booking_id="booking-b",
                 service_date=d1,
-                item_text="Cold Brew Bottle",
+                mass_time="06:00 AM",
+                mass_language="Telugu",
+                mass_label="06:00 AM (Telugu)",
+                intention_text="Special intention of Mary",
                 amount_paise=10000,
             )
         ],
     )
 
-    # User C books d1 (PENDING) - must NOT appear in paid schedule
+    # Pending booking must NOT appear in paid schedule
     b3 = Booking(
         id="booking-c",
         customer_name="Pending User",
-        customer_phone="9000000000",
-        total_days=1,
+        total_masses=1,
         total_amount_paise=10000,
         gateway_name="fake",
         gateway_order_id="order_c",
@@ -82,7 +92,10 @@ def test_multi_user_same_date_inserts_and_chronological_query(
             BookingItem(
                 booking_id="booking-c",
                 service_date=d1,
-                item_text="Unpaid Item",
+                mass_time="06:00 PM",
+                mass_language="English",
+                mass_label="06:00 PM (English)",
+                intention_text="Unpaid intention",
                 amount_paise=10000,
             )
         ],
@@ -90,21 +103,17 @@ def test_multi_user_same_date_inserts_and_chronological_query(
 
     rows = repo.get_paid_items_chronological()
     assert len(rows) == 3
-
-    dates = [item.service_date for item, _ in rows]
-    assert dates == [d1, d1, d2]
-
-    d1_customers = {booking.customer_name for item, booking in rows if item.service_date == d1}
-    assert d1_customers == {"Aarav Sharma", "Priya Nair"}
+    assert [item.service_date for item, _ in rows] == [d1, d1, d2]
 
 
-def test_mark_paid_updates_status_and_payment_id(db_session: Session) -> None:
+def test_mark_paid_creates_payment_log_and_updates_status(
+    db_session: Session,
+) -> None:
     repo = BookingRepository(db_session)
     booking = Booking(
         id="booking-mark",
-        customer_name="Rohan",
-        customer_phone="9988776655",
-        total_days=1,
+        customer_name="Riya",
+        total_masses=1,
         total_amount_paise=10000,
         gateway_name="fake",
         gateway_order_id="order_mark",
@@ -116,7 +125,10 @@ def test_mark_paid_updates_status_and_payment_id(db_session: Session) -> None:
             BookingItem(
                 booking_id="booking-mark",
                 service_date=date(2026, 11, 21),
-                item_text="Green Tea",
+                mass_time="06:00 AM",
+                mass_language="Telugu",
+                mass_label="06:00 AM (Telugu)",
+                intention_text="Thanksgiving mass",
                 amount_paise=10000,
             )
         ],
@@ -124,8 +136,47 @@ def test_mark_paid_updates_status_and_payment_id(db_session: Session) -> None:
 
     fetched = repo.get_by_gateway_order_id("order_mark")
     assert fetched is not None
-    assert fetched.status == BookingStatus.PENDING.value
-
-    updated = repo.mark_paid(fetched, "pay_12345")
+    updated = repo.mark_paid(fetched, "pay_12345", event_type="WEBHOOK_PAID")
     assert updated.status == BookingStatus.PAID.value
     assert updated.gateway_payment_id == "pay_12345"
+
+    logs = repo.get_recent_payment_logs(limit=5)
+    assert len(logs) == 1
+    assert logs[0].event_type == "WEBHOOK_PAID"
+    assert logs[0].status == BookingStatus.PAID.value
+
+
+def test_date_override_replaces_schedule_for_feast_day(
+    db_session: Session,
+) -> None:
+    repo = BookingRepository(db_session)
+    feast_date = date(2026, 11, 24)
+    repo.replace_date_override(
+        feast_date,
+        [
+            MassDateOverride(
+                service_date=feast_date,
+                occasion_label="Feast Day",
+                mass_time="06:00 AM",
+                language="Tamil",
+                sort_order=1,
+            ),
+            MassDateOverride(
+                service_date=feast_date,
+                occasion_label="Feast Day",
+                mass_time="07:00 AM",
+                language="Telugu",
+                sort_order=2,
+            ),
+            MassDateOverride(
+                service_date=feast_date,
+                occasion_label="Feast Day",
+                mass_time="08:00 AM",
+                language="English",
+                sort_order=3,
+            ),
+        ],
+    )
+    found = repo.get_overrides_in_range(feast_date, feast_date)
+    assert len(found) == 3
+    assert [m.language for m in found] == ["Tamil", "Telugu", "English"]

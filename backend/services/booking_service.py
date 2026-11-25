@@ -1,27 +1,42 @@
 import csv
+import hashlib
+import hmac
 import io
 import uuid
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Optional
 from zoneinfo import ZoneInfo
 
 from gateways.base import PaymentProvider
-from models.booking import Booking, BookingItem, BookingStatus
+from models.booking import (
+    Booking,
+    BookingItem,
+    BookingStatus,
+    MassDateOverride,
+    PaymentLog,
+)
 from repositories.booking_repo import BookingRepository
 from schemas.booking_schema import (
+    AdminMassGroup,
+    AdminOfferingItem,
     AdminScheduleDateGroup,
-    AdminScheduleItem,
     AdminScheduleResponse,
     BookingItemResponse,
     BookingStatusResponse,
+    CalendarDaySchedule,
     CalendarWindowResponse,
     CreateBookingRequest,
     CreateBookingResponse,
+    MassSlotInfo,
+    PaymentLogItem,
+    PaymentTallyResponse,
+    UpsertDateOverrideRequest,
+    VerifyPaymentRequest,
 )
 
 IST = ZoneInfo("Asia/Kolkata")
-PRICE_PER_DAY_PAISE = 10000  # ₹100.00 per day
+PRICE_PER_MASS_PAISE = 10000  # ₹100.00 per Mass offering
 BOOKING_WINDOW_DAYS = 30
 
 
@@ -30,62 +45,145 @@ class BookingNotFoundError(Exception):
 
 
 class BookingValidationError(Exception):
-    """Raised when business rules (e.g. 30-day window) are violated."""
+    """Raised when business rules (window, Mass slot, etc.) are violated."""
 
 
 class WebhookVerificationError(Exception):
     """Raised when payment webhook signature or payload is invalid."""
 
 
+def format_mass_label(mass_time: str, language: str) -> str:
+    return f"{mass_time.strip()} ({language.strip()})"
+
+
 class BookingService:
-    """Pure Business Logic Layer coordinating repository and payment gateway."""
+    """Pure Business Logic Layer coordinating Mass schedules, bookings, and payment logs."""
 
     def __init__(
         self,
         repo: BookingRepository,
         payment_provider: PaymentProvider,
         today_provider: Optional[Callable[[], date]] = None,
-        price_per_day_paise: int = PRICE_PER_DAY_PAISE,
+        price_per_mass_paise: int = PRICE_PER_MASS_PAISE,
         window_days: int = BOOKING_WINDOW_DAYS,
     ) -> None:
         self.repo = repo
         self.payment_provider = payment_provider
         self._today_provider = today_provider or (lambda: datetime.now(IST).date())
-        self.price_per_day_paise = price_per_day_paise
+        self.price_per_mass_paise = price_per_mass_paise
         self.window_days = window_days
+
+    def _build_schedule_map(
+        self, start_date: date, end_date: date
+    ) -> dict[date, CalendarDaySchedule]:
+        self.repo.ensure_default_mass_rules_seeded()
+        default_rules = self.repo.get_active_default_rules()
+        overrides = self.repo.get_overrides_in_range(start_date, end_date)
+
+        defaults_by_type: dict[str, list[MassSlotInfo]] = defaultdict(list)
+        for rule in default_rules:
+            defaults_by_type[rule.day_type].append(
+                MassSlotInfo(
+                    mass_time=rule.mass_time,
+                    language=rule.language,
+                    mass_label=format_mass_label(rule.mass_time, rule.language),
+                    amount_paise=rule.amount_paise or self.price_per_mass_paise,
+                    sort_order=rule.sort_order,
+                )
+            )
+
+        overrides_by_date: dict[date, list[MassDateOverride]] = defaultdict(list)
+        for ov in overrides:
+            overrides_by_date[ov.service_date].append(ov)
+
+        schedule_map: dict[date, CalendarDaySchedule] = {}
+        total_days = (end_date - start_date).days + 1
+        for offset in range(total_days):
+            current = start_date + timedelta(days=offset)
+            is_sunday = current.weekday() == 6
+
+            if current in overrides_by_date:
+                day_overrides = overrides_by_date[current]
+                masses = [
+                    MassSlotInfo(
+                        mass_time=ov.mass_time,
+                        language=ov.language,
+                        mass_label=format_mass_label(ov.mass_time, ov.language),
+                        amount_paise=ov.amount_paise or self.price_per_mass_paise,
+                        sort_order=ov.sort_order,
+                    )
+                    for ov in day_overrides
+                ]
+                schedule_map[current] = CalendarDaySchedule(
+                    service_date=current,
+                    is_sunday=is_sunday,
+                    is_override=True,
+                    occasion_label=day_overrides[0].occasion_label,
+                    masses=masses,
+                )
+            else:
+                day_type = "SUNDAY" if is_sunday else "WEEKDAY"
+                masses = list(defaults_by_type.get(day_type, []))
+                schedule_map[current] = CalendarDaySchedule(
+                    service_date=current,
+                    is_sunday=is_sunday,
+                    is_override=False,
+                    occasion_label="Sunday" if is_sunday else None,
+                    masses=masses,
+                )
+
+        return schedule_map
 
     def get_calendar_window(self) -> CalendarWindowResponse:
         today = self._today_provider()
         end_date = today + timedelta(days=self.window_days - 1)
+        schedule_map = self._build_schedule_map(today, end_date)
         return CalendarWindowResponse(
             start_date=today,
             end_date=end_date,
             days=self.window_days,
-            price_per_day_paise=self.price_per_day_paise,
+            default_price_per_mass_paise=self.price_per_mass_paise,
+            max_intention_length=50,
             timezone="Asia/Kolkata",
+            schedule=[schedule_map[today + timedelta(days=i)] for i in range(self.window_days)],
         )
-
-    def _validate_dates_in_window(self, dates: list[date]) -> None:
-        today = self._today_provider()
-        max_date = today + timedelta(days=self.window_days - 1)
-        for d in dates:
-            if d < today:
-                raise BookingValidationError(
-                    f"Date {d.isoformat()} is in the past. Booking starts today ({today.isoformat()})."
-                )
-            if d > max_date:
-                raise BookingValidationError(
-                    f"Date {d.isoformat()} exceeds the {self.window_days}-day booking window ending {max_date.isoformat()}."
-                )
 
     def create_booking(
         self, payload: CreateBookingRequest
     ) -> CreateBookingResponse:
-        sorted_items = sorted(payload.items, key=lambda item: item.service_date)
-        self._validate_dates_in_window([item.service_date for item in sorted_items])
+        today = self._today_provider()
+        max_date = today + timedelta(days=self.window_days - 1)
 
-        total_days = len(sorted_items)
-        total_amount_paise = total_days * self.price_per_day_paise
+        sorted_items = sorted(
+            payload.items, key=lambda item: (item.service_date, item.mass_label)
+        )
+        for item in sorted_items:
+            if item.service_date < today:
+                raise BookingValidationError(
+                    f"Date {item.service_date.isoformat()} is in the past. Booking starts today ({today.isoformat()})."
+                )
+            if item.service_date > max_date:
+                raise BookingValidationError(
+                    f"Date {item.service_date.isoformat()} exceeds the {self.window_days}-day booking window ending {max_date.isoformat()}."
+                )
+
+        schedule_map = self._build_schedule_map(today, max_date)
+
+        resolved_items: list[tuple[date, MassSlotInfo, str]] = []
+        for item in sorted_items:
+            day_sched = schedule_map.get(item.service_date)
+            slot_lookup = {
+                m.mass_label: m for m in (day_sched.masses if day_sched else [])
+            }
+            matched_slot = slot_lookup.get(item.mass_label)
+            if not matched_slot:
+                raise BookingValidationError(
+                    f"Mass timing '{item.mass_label}' is not scheduled on {item.service_date.isoformat()}."
+                )
+            resolved_items.append((item.service_date, matched_slot, item.intention_text))
+
+        total_masses = len(resolved_items)
+        total_amount_paise = sum(slot.amount_paise for _, slot, _ in resolved_items)
 
         booking_id = str(uuid.uuid4())
         receipt = f"rcpt_{booking_id[:16]}"
@@ -94,16 +192,15 @@ class BookingService:
             receipt=receipt,
             notes={
                 "booking_id": booking_id,
-                "customer_name": payload.customer_name,
-                "total_days": str(total_days),
+                "customer_name": payload.customer_name or "Devotee",
+                "total_masses": str(total_masses),
             },
         )
 
         booking = Booking(
             id=booking_id,
             customer_name=payload.customer_name,
-            customer_phone=payload.customer_phone,
-            total_days=total_days,
+            total_masses=total_masses,
             total_amount_paise=total_amount_paise,
             gateway_name=order_result.gateway_name,
             gateway_order_id=order_result.order_id,
@@ -112,19 +209,32 @@ class BookingService:
         booking_items = [
             BookingItem(
                 booking_id=booking_id,
-                service_date=item.service_date,
-                item_text=item.item_text,
-                amount_paise=self.price_per_day_paise,
+                service_date=svc_date,
+                mass_time=slot.mass_time,
+                mass_language=slot.language,
+                mass_label=slot.mass_label,
+                intention_text=intention_text,
+                amount_paise=slot.amount_paise,
             )
-            for item in sorted_items
+            for svc_date, slot, intention_text in resolved_items
         ]
+        initial_log = PaymentLog(
+            booking_id=booking_id,
+            gateway_name=order_result.gateway_name,
+            gateway_order_id=order_result.order_id,
+            event_type="ORDER_CREATED",
+            status=BookingStatus.PENDING.value,
+            amount_paise=total_amount_paise,
+            note=f"{total_masses} Mass offering(s)",
+        )
 
-        saved = self.repo.create_booking(booking, booking_items)
+        saved = self.repo.create_booking(booking, booking_items, initial_log)
         return CreateBookingResponse(
             booking_id=saved.id,
+            customer_name=saved.customer_name,
             gateway_name=saved.gateway_name,
             gateway_order_id=saved.gateway_order_id,
-            total_days=saved.total_days,
+            total_masses=saved.total_masses,
             total_amount_paise=saved.total_amount_paise,
             currency="INR",
             status=saved.status,
@@ -138,8 +248,7 @@ class BookingService:
         return BookingStatusResponse(
             booking_id=booking.id,
             customer_name=booking.customer_name,
-            customer_phone=booking.customer_phone,
-            total_days=booking.total_days,
+            total_masses=booking.total_masses,
             total_amount_paise=booking.total_amount_paise,
             gateway_name=booking.gateway_name,
             gateway_order_id=booking.gateway_order_id,
@@ -148,6 +257,35 @@ class BookingService:
             created_at=booking.created_at,
             items=[BookingItemResponse.model_validate(i) for i in booking.items],
         )
+
+    def verify_razorpay_payment(
+        self, payload: VerifyPaymentRequest, key_secret: str
+    ) -> BookingStatusResponse:
+        if not key_secret:
+            raise WebhookVerificationError("RAZORPAY_KEY_SECRET is not configured.")
+
+        message = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}".encode("utf-8")
+        expected_sig = hmac.new(
+            key_secret.encode("utf-8"),
+            message,
+            hashlib.sha256,
+        ).hexdigest()
+
+        if not hmac.compare_digest(expected_sig, payload.razorpay_signature):
+            raise WebhookVerificationError("Invalid Razorpay payment signature.")
+
+        booking = self.repo.get_by_id(payload.booking_id)
+        if not booking or booking.gateway_order_id != payload.razorpay_order_id:
+            raise BookingNotFoundError("Booking or order ID mismatch.")
+
+        if booking.status != BookingStatus.PAID.value:
+            self.repo.mark_paid(
+                booking,
+                payload.razorpay_payment_id,
+                event_type="PAYMENT_VERIFIED",
+                note="Verified via Razorpay Checkout callback",
+            )
+        return self.get_booking_status(booking.id)
 
     def confirm_fake_payment(self, booking_id: str) -> BookingStatusResponse:
         booking = self.repo.get_by_id(booking_id)
@@ -158,8 +296,11 @@ class BookingService:
                 "Fake payment confirmation is only allowed for fake gateway bookings."
             )
         if booking.status != BookingStatus.PAID.value:
-            booking = self.repo.mark_paid(
-                booking, f"pay_fake_{booking.id[:12]}"
+            self.repo.mark_paid(
+                booking,
+                f"pay_fake_{booking.id[:12]}",
+                event_type="FAKE_CONFIRMED",
+                note="Confirmed via fake gateway",
             )
         return self.get_booking_status(booking.id)
 
@@ -177,7 +318,6 @@ class BookingService:
                 f"No booking found for gateway order {event.order_id}."
             )
 
-        # Idempotency guard: never duplicate or revert an already PAID booking
         if booking.status == BookingStatus.PAID.value:
             return {
                 "status": "already_paid",
@@ -186,7 +326,12 @@ class BookingService:
             }
 
         if event.is_payment_captured:
-            updated = self.repo.mark_paid(booking, event.payment_id)
+            updated = self.repo.mark_paid(
+                booking,
+                event.payment_id,
+                event_type="WEBHOOK_PAID",
+                note=f"Webhook event: {event.event_type}",
+            )
             return {
                 "status": "paid",
                 "booking_id": updated.id,
@@ -194,7 +339,11 @@ class BookingService:
             }
 
         if event.is_payment_failed and booking.status == BookingStatus.PENDING.value:
-            updated = self.repo.mark_failed(booking)
+            updated = self.repo.mark_failed(
+                booking,
+                gateway_payment_id=event.payment_id,
+                note=f"Webhook event: {event.event_type}",
+            )
             return {
                 "status": "failed",
                 "booking_id": updated.id,
@@ -216,40 +365,65 @@ class BookingService:
             start_date=start_date, end_date=end_date
         )
 
-        grouped: dict[date, list[AdminScheduleItem]] = defaultdict(list)
+        # Group day-wise -> mass-wise
+        by_date: dict[date, dict[str, list[tuple[BookingItem, Booking]]]] = defaultdict(
+            lambda: defaultdict(list)
+        )
         for item, booking in rows:
-            grouped[item.service_date].append(
-                AdminScheduleItem(
-                    booking_id=booking.id,
-                    customer_name=booking.customer_name,
-                    customer_phone=booking.customer_phone,
-                    item_text=item.item_text,
-                    amount_paise=item.amount_paise,
-                    gateway_payment_id=booking.gateway_payment_id,
-                )
-            )
+            by_date[item.service_date][item.mass_label].append((item, booking))
 
         groups: list[AdminScheduleDateGroup] = []
-        total_orders = 0
+        total_offerings = 0
         total_amount_paise = 0
 
-        for svc_date in sorted(grouped.keys()):
-            orders = grouped[svc_date]
-            day_total = sum(o.amount_paise for o in orders)
-            total_orders += len(orders)
-            total_amount_paise += day_total
+        for svc_date in sorted(by_date.keys()):
+            mass_map = by_date[svc_date]
+            mass_groups: list[AdminMassGroup] = []
+            day_offerings = 0
+            day_amount = 0
+
+            for mass_label in sorted(mass_map.keys()):
+                entries = mass_map[mass_label]
+                first_item = entries[0][0]
+                offerings = [
+                    AdminOfferingItem(
+                        booking_id=b.id,
+                        customer_name=b.customer_name,
+                        intention_text=i.intention_text,
+                        amount_paise=i.amount_paise,
+                        gateway_payment_id=b.gateway_payment_id,
+                    )
+                    for i, b in entries
+                ]
+                mass_amount = sum(o.amount_paise for o in offerings)
+                day_offerings += len(offerings)
+                day_amount += mass_amount
+                mass_groups.append(
+                    AdminMassGroup(
+                        mass_label=mass_label,
+                        mass_time=first_item.mass_time,
+                        mass_language=first_item.mass_language,
+                        offering_count=len(offerings),
+                        total_amount_paise=mass_amount,
+                        offerings=offerings,
+                    )
+                )
+
+            total_offerings += day_offerings
+            total_amount_paise += day_amount
             groups.append(
                 AdminScheduleDateGroup(
                     service_date=svc_date,
                     formatted_date=svc_date.strftime("%a, %d %b %Y"),
-                    order_count=len(orders),
-                    total_amount_paise=day_total,
-                    orders=orders,
+                    is_sunday=svc_date.weekday() == 6,
+                    offering_count=day_offerings,
+                    total_amount_paise=day_amount,
+                    masses=mass_groups,
                 )
             )
 
         return AdminScheduleResponse(
-            total_orders=total_orders,
+            total_offerings=total_offerings,
             total_amount_paise=total_amount_paise,
             groups=groups,
         )
@@ -268,26 +442,86 @@ class BookingService:
             [
                 "service_date",
                 "formatted_date",
+                "mass_time",
+                "mass_language",
+                "mass_label",
                 "booking_id",
                 "customer_name",
-                "customer_phone",
-                "item_text",
+                "intention_text",
                 "amount_inr",
                 "gateway_payment_id",
             ]
         )
         for group in schedule.groups:
-            for order in group.orders:
-                writer.writerow(
-                    [
-                        group.service_date.isoformat(),
-                        group.formatted_date,
-                        order.booking_id,
-                        order.customer_name,
-                        order.customer_phone,
-                        order.item_text,
-                        f"{order.amount_paise / 100:.2f}",
-                        order.gateway_payment_id or "",
-                    ]
-                )
+            for mass in group.masses:
+                for offering in mass.offerings:
+                    writer.writerow(
+                        [
+                            group.service_date.isoformat(),
+                            group.formatted_date,
+                            mass.mass_time,
+                            mass.mass_language,
+                            mass.mass_label,
+                            offering.booking_id,
+                            offering.customer_name or "",
+                            offering.intention_text,
+                            f"{offering.amount_paise / 100:.2f}",
+                            offering.gateway_payment_id or "",
+                        ]
+                    )
         return output.getvalue()
+
+    def get_payment_tally(
+        self, tally_date: Optional[date] = None
+    ) -> PaymentTallyResponse:
+        start_dt: Optional[datetime] = None
+        end_dt: Optional[datetime] = None
+        if tally_date is not None:
+            start_ist = datetime.combine(tally_date, time.min, tzinfo=IST)
+            end_ist = datetime.combine(tally_date, time.max, tzinfo=IST)
+            start_dt = start_ist.astimezone(timezone.utc)
+            end_dt = end_ist.astimezone(timezone.utc)
+
+        bookings = self.repo.get_bookings_for_tally(start_dt=start_dt, end_dt=end_dt)
+        paid = [b for b in bookings if b.status == BookingStatus.PAID.value]
+        pending = [b for b in bookings if b.status == BookingStatus.PENDING.value]
+        failed = [b for b in bookings if b.status == BookingStatus.FAILED.value]
+
+        recent_logs = self.repo.get_recent_payment_logs(limit=40)
+        return PaymentTallyResponse(
+            paid_count=len(paid),
+            paid_amount_paise=sum(b.total_amount_paise for b in paid),
+            pending_count=len(pending),
+            pending_amount_paise=sum(b.total_amount_paise for b in pending),
+            failed_count=len(failed),
+            failed_amount_paise=sum(b.total_amount_paise for b in failed),
+            recent_logs=[PaymentLogItem.model_validate(l) for l in recent_logs],
+        )
+
+    def upsert_date_override(
+        self, payload: UpsertDateOverrideRequest
+    ) -> CalendarDaySchedule:
+        overrides = [
+            MassDateOverride(
+                service_date=payload.service_date,
+                occasion_label=payload.occasion_label.strip(),
+                mass_time=m.mass_time.strip(),
+                language=m.language.strip(),
+                sort_order=m.sort_order,
+                amount_paise=m.amount_paise,
+                is_active=True,
+            )
+            for m in payload.masses
+        ]
+        self.repo.replace_date_override(payload.service_date, overrides)
+        schedule_map = self._build_schedule_map(
+            payload.service_date, payload.service_date
+        )
+        return schedule_map[payload.service_date]
+
+    def delete_date_override(self, service_date: date) -> dict[str, str]:
+        deleted = self.repo.delete_date_override(service_date)
+        return {
+            "status": "deleted" if deleted > 0 else "not_found",
+            "service_date": service_date.isoformat(),
+        }

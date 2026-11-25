@@ -40,6 +40,6 @@ def get_booking_service(
     return BookingService(
         repo=repo,
         payment_provider=payment_provider,
-        price_per_day_paise=settings.PRICE_PER_DAY_PAISE,
+        price_per_mass_paise=settings.PRICE_PER_MASS_PAISE,
         window_days=settings.BOOKING_WINDOW_DAYS,
     )

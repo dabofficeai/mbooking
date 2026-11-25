@@ -1,32 +1,22 @@
-import hashlib
-import hmac
-
 from fastapi import APIRouter, Depends, HTTPException, status
-from pydantic import BaseModel
 
 from config import Settings, get_settings
-from models.booking import BookingStatus
 from routers.dependencies import get_booking_service
 from schemas.booking_schema import (
     BookingStatusResponse,
     CalendarWindowResponse,
     CreateBookingRequest,
     CreateBookingResponse,
+    VerifyPaymentRequest,
 )
 from services.booking_service import (
     BookingNotFoundError,
     BookingService,
     BookingValidationError,
+    WebhookVerificationError,
 )
 
 router = APIRouter(prefix="/api", tags=["Public"])
-
-
-class VerifyPaymentRequest(BaseModel):
-    booking_id: str
-    razorpay_order_id: str
-    razorpay_payment_id: str
-    razorpay_signature: str
 
 
 @router.get("/health")
@@ -65,36 +55,20 @@ def verify_razorpay_payment(
     service: BookingService = Depends(get_booking_service),
     settings: Settings = Depends(get_settings),
 ) -> BookingStatusResponse:
-    if not settings.RAZORPAY_KEY_SECRET:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="RAZORPAY_KEY_SECRET is not configured.",
+    try:
+        return service.verify_razorpay_payment(
+            payload=payload, key_secret=settings.RAZORPAY_KEY_SECRET
         )
-
-    message = f"{payload.razorpay_order_id}|{payload.razorpay_payment_id}".encode("utf-8")
-    expected_sig = hmac.new(
-        settings.RAZORPAY_KEY_SECRET.encode("utf-8"),
-        message,
-        hashlib.sha256,
-    ).hexdigest()
-
-    if not hmac.compare_digest(expected_sig, payload.razorpay_signature):
+    except WebhookVerificationError as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Invalid Razorpay payment signature.",
-        )
-
-    booking = service.repo.get_by_id(payload.booking_id)
-    if not booking or booking.gateway_order_id != payload.razorpay_order_id:
+            detail=str(exc),
+        ) from exc
+    except BookingNotFoundError as exc:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
-            detail="Booking or order ID mismatch.",
-        )
-
-    if booking.status != BookingStatus.PAID.value:
-        service.repo.mark_paid(booking, payload.razorpay_payment_id)
-
-    return service.get_booking_status(booking.id)
+            detail=str(exc),
+        ) from exc
 
 
 @router.post("/bookings/{booking_id}/confirm-fake", response_model=BookingStatusResponse)

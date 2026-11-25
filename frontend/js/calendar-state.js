@@ -1,36 +1,39 @@
-export const PRICE_PER_DAY_INR = 100;
-export const PRICE_PER_DAY_PAISE = 10000;
+export const PRICE_PER_MASS_INR = 100;
+export const PRICE_PER_MASS_PAISE = 10000;
 export const WINDOW_DAYS = 30;
-export const MAX_ITEM_TEXT_LENGTH = 100;
+export const MAX_INTENTION_LENGTH = 50;
+
+export const INTENTION_TEMPLATES = [
+  "Departed soul of ",
+  "Thanksgiving mass for ",
+  "Special intention of ",
+  "Birthday blessings for ",
+];
 
 const IST_OFFSET_MS = 330 * 60 * 1000; // UTC+5:30
-
 const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const MONTH_NAMES = [
   "Jan", "Feb", "Mar", "Apr", "May", "Jun",
   "Jul", "Aug", "Sep", "Oct", "Nov", "Dec",
 ];
 
-/**
- * Returns today's YYYY-MM-DD date string in Asia/Kolkata (IST).
- */
 export function getIstTodayIso(now = new Date()) {
   const istTime = new Date(now.getTime() + IST_OFFSET_MS);
   return istTime.toISOString().slice(0, 10);
 }
 
-/**
- * Adds `days` to an ISO YYYY-MM-DD string and returns the resulting YYYY-MM-DD.
- */
 export function addDaysIso(isoDate, days) {
   const [y, m, d] = isoDate.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d + days));
   return dt.toISOString().slice(0, 10);
 }
 
-/**
- * Formats an ISO YYYY-MM-DD date into a human-friendly label like "Thu, 19 Nov 2026".
- */
+export function isSundayIso(isoDate) {
+  const [y, m, d] = isoDate.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  return dt.getUTCDay() === 0;
+}
+
 export function formatDateHuman(isoDate) {
   const [y, m, d] = isoDate.split("-").map(Number);
   const dt = new Date(Date.UTC(y, m - 1, d));
@@ -40,9 +43,62 @@ export function formatDateHuman(isoDate) {
   return `${dayName}, ${dd} ${monthName} ${y}`;
 }
 
-/**
- * Builds the 30-day rolling calendar window starting from `startDateIso`.
- */
+export function buildDefaultSchedule(startDateIso, days = WINDOW_DAYS) {
+  const weekdayMasses = [
+    {
+      mass_time: "06:00 AM",
+      language: "Telugu",
+      mass_label: "06:00 AM (Telugu)",
+      amount_paise: PRICE_PER_MASS_PAISE,
+      sort_order: 1,
+    },
+    {
+      mass_time: "06:00 PM",
+      language: "English",
+      mass_label: "06:00 PM (English)",
+      amount_paise: PRICE_PER_MASS_PAISE,
+      sort_order: 2,
+    },
+  ];
+  const sundayMasses = [
+    {
+      mass_time: "06:00 AM",
+      language: "Telugu",
+      mass_label: "06:00 AM (Telugu)",
+      amount_paise: PRICE_PER_MASS_PAISE,
+      sort_order: 1,
+    },
+    {
+      mass_time: "07:00 AM",
+      language: "English",
+      mass_label: "07:00 AM (English)",
+      amount_paise: PRICE_PER_MASS_PAISE,
+      sort_order: 2,
+    },
+    {
+      mass_time: "06:00 PM",
+      language: "English",
+      mass_label: "06:00 PM (English)",
+      amount_paise: PRICE_PER_MASS_PAISE,
+      sort_order: 3,
+    },
+  ];
+
+  const schedule = [];
+  for (let i = 0; i < days; i += 1) {
+    const iso = addDaysIso(startDateIso, i);
+    const sunday = isSundayIso(iso);
+    schedule.push({
+      service_date: iso,
+      is_sunday: sunday,
+      is_override: false,
+      occasion_label: sunday ? "Sunday" : null,
+      masses: sunday ? sundayMasses.map((m) => ({ ...m })) : weekdayMasses.map((m) => ({ ...m })),
+    });
+  }
+  return schedule;
+}
+
 export function buildCalendarWindow(startDateIso, days = WINDOW_DAYS) {
   const result = [];
   for (let i = 0; i < days; i += 1) {
@@ -56,40 +112,68 @@ export function buildCalendarWindow(startDateIso, days = WINDOW_DAYS) {
       monthShort: MONTH_NAMES[dt.getUTCMonth()],
       fullLabel: formatDateHuman(iso),
       isToday: i === 0,
+      isSunday: dt.getUTCDay() === 0,
     });
   }
   return result;
 }
 
-/**
- * Checks whether `isoDate` falls inside [startDateIso, startDateIso + days - 1].
- */
 export function isDateInWindow(isoDate, startDateIso, days = WINDOW_DAYS) {
   const endDateIso = addDaysIso(startDateIso, days - 1);
   return isoDate >= startDateIso && isoDate <= endDateIso;
 }
 
+export function offeringKey(serviceDate, massLabel) {
+  return `${serviceDate}::${massLabel}`;
+}
+
 /**
- * Pure state manager for multi-date selection, item text modes, and ₹100/day pricing.
+ * Pure ES6 state manager for multi-date, multi-Mass selection & 50-char intentions.
  */
-export class CalendarBookingState {
+export class MassBookingState {
   constructor(startDateIso = getIstTodayIso(), windowDays = WINDOW_DAYS) {
     this.startDateIso = startDateIso;
     this.windowDays = windowDays;
-    this.sameItemMode = true;
-    this.sharedItemText = "";
-    /** @type {Map<string, string>} */
-    this.selectedDates = new Map();
+    this.sameIntentionMode = true;
+    this.sharedIntentionText = "";
+    /** @type {Set<string>} */
+    this.selectedDates = new Set();
+    /** @type {Map<string, {service_date: string, mass_label: string, amount_paise: number, intention_text: string}>} */
+    this.selectedOfferings = new Map();
+    /** @type {Map<string, {service_date: string, is_sunday: boolean, is_override: boolean, occasion_label: string|null, masses: Array}>} */
+    this.scheduleByDate = new Map();
+
+    this.setSchedule(buildDefaultSchedule(startDateIso, windowDays));
   }
 
-  setWindow(startDateIso, windowDays = WINDOW_DAYS) {
-    this.startDateIso = startDateIso;
-    this.windowDays = windowDays;
-    for (const dateIso of Array.from(this.selectedDates.keys())) {
-      if (!isDateInWindow(dateIso, this.startDateIso, this.windowDays)) {
-        this.selectedDates.delete(dateIso);
+  setSchedule(scheduleArray, startDateIso = null, windowDays = null) {
+    if (startDateIso) this.startDateIso = startDateIso;
+    if (windowDays) this.windowDays = windowDays;
+
+    this.scheduleByDate.clear();
+    for (const day of scheduleArray) {
+      this.scheduleByDate.set(day.service_date, day);
+    }
+
+    // Prune any out-of-window dates or removed Mass slots
+    for (const d of Array.from(this.selectedDates)) {
+      if (!this.scheduleByDate.has(d)) {
+        this.selectedDates.delete(d);
       }
     }
+    for (const [key, item] of Array.from(this.selectedOfferings.entries())) {
+      const day = this.scheduleByDate.get(item.service_date);
+      const validSlot = day?.masses.find((m) => m.mass_label === item.mass_label);
+      if (!validSlot) {
+        this.selectedOfferings.delete(key);
+      } else {
+        item.amount_paise = validSlot.amount_paise;
+      }
+    }
+  }
+
+  getDaySchedule(isoDate) {
+    return this.scheduleByDate.get(isoDate) || null;
   }
 
   toggleDate(isoDate) {
@@ -100,92 +184,149 @@ export class CalendarBookingState {
     }
     if (this.selectedDates.has(isoDate)) {
       this.selectedDates.delete(isoDate);
+      for (const [key, item] of Array.from(this.selectedOfferings.entries())) {
+        if (item.service_date === isoDate) {
+          this.selectedOfferings.delete(key);
+        }
+      }
       return false;
     }
-    const initialText = this.sameItemMode ? this.sharedItemText : "";
-    this.selectedDates.set(isoDate, initialText);
+    this.selectedDates.add(isoDate);
     return true;
   }
 
-  setSameItemMode(enabled) {
-    this.sameItemMode = Boolean(enabled);
-    if (this.sameItemMode) {
-      for (const dateIso of this.selectedDates.keys()) {
-        this.selectedDates.set(dateIso, this.sharedItemText);
+  toggleMassOffering(isoDate, massLabel) {
+    const day = this.scheduleByDate.get(isoDate);
+    if (!day) {
+      throw new Error(`Date ${isoDate} is outside the booking window.`);
+    }
+    const slot = day.masses.find((m) => m.mass_label === massLabel);
+    if (!slot) {
+      throw new Error(`Mass '${massLabel}' is not available on ${isoDate}.`);
+    }
+
+    this.selectedDates.add(isoDate);
+    const key = offeringKey(isoDate, massLabel);
+    if (this.selectedOfferings.has(key)) {
+      this.selectedOfferings.delete(key);
+      return false;
+    }
+
+    this.selectedOfferings.set(key, {
+      service_date: isoDate,
+      mass_label: massLabel,
+      amount_paise: slot.amount_paise ?? PRICE_PER_MASS_PAISE,
+      intention_text: this.sameIntentionMode ? this.sharedIntentionText : "",
+    });
+    return true;
+  }
+
+  applyMassTimingAcrossSelectedDates(massLabel) {
+    let added = 0;
+    for (const isoDate of this.selectedDates) {
+      const day = this.scheduleByDate.get(isoDate);
+      const slot = day?.masses.find((m) => m.mass_label === massLabel);
+      if (slot) {
+        const key = offeringKey(isoDate, massLabel);
+        if (!this.selectedOfferings.has(key)) {
+          this.selectedOfferings.set(key, {
+            service_date: isoDate,
+            mass_label: massLabel,
+            amount_paise: slot.amount_paise ?? PRICE_PER_MASS_PAISE,
+            intention_text: this.sameIntentionMode ? this.sharedIntentionText : "",
+          });
+          added += 1;
+        }
+      }
+    }
+    return added;
+  }
+
+  setSameIntentionMode(enabled) {
+    this.sameIntentionMode = Boolean(enabled);
+    if (this.sameIntentionMode) {
+      for (const item of this.selectedOfferings.values()) {
+        item.intention_text = this.sharedIntentionText;
       }
     }
   }
 
-  setSharedItemText(text) {
-    this.sharedItemText = text;
-    if (this.sameItemMode) {
-      for (const dateIso of this.selectedDates.keys()) {
-        this.selectedDates.set(dateIso, text);
+  setSharedIntentionText(text) {
+    this.sharedIntentionText = text;
+    if (this.sameIntentionMode) {
+      for (const item of this.selectedOfferings.values()) {
+        item.intention_text = text;
       }
     }
   }
 
-  setDateItemText(isoDate, text) {
-    if (!this.selectedDates.has(isoDate)) {
-      throw new Error(`Date ${isoDate} is not currently selected.`);
+  setOfferingIntention(key, text) {
+    const item = this.selectedOfferings.get(key);
+    if (!item) {
+      throw new Error(`Offering ${key} is not selected.`);
     }
-    this.selectedDates.set(isoDate, text);
+    item.intention_text = text;
   }
 
-  getSortedSelectedEntries() {
-    return Array.from(this.selectedDates.entries())
-      .sort(([a], [b]) => a.localeCompare(b))
-      .map(([service_date, item_text]) => ({
-        service_date,
-        item_text,
-      }));
+  getSortedSelectedDates() {
+    return Array.from(this.selectedDates).sort((a, b) => a.localeCompare(b));
   }
 
-  getTotalDays() {
-    return this.selectedDates.size;
+  getSortedOfferings() {
+    return Array.from(this.selectedOfferings.entries())
+      .map(([key, item]) => ({ key, ...item }))
+      .sort((a, b) => {
+        const dateCmp = a.service_date.localeCompare(b.service_date);
+        return dateCmp !== 0 ? dateCmp : a.mass_label.localeCompare(b.mass_label);
+      });
   }
 
-  getTotalAmountInr() {
-    return this.getTotalDays() * PRICE_PER_DAY_INR;
+  getTotalMasses() {
+    return this.selectedOfferings.size;
   }
 
   getTotalAmountPaise() {
-    return this.getTotalDays() * PRICE_PER_DAY_PAISE;
+    let sum = 0;
+    for (const item of this.selectedOfferings.values()) {
+      sum += item.amount_paise;
+    }
+    return sum;
+  }
+
+  getTotalAmountInr() {
+    return this.getTotalAmountPaise() / 100;
   }
 
   clearSelection() {
     this.selectedDates.clear();
+    this.selectedOfferings.clear();
   }
 
-  validateForSubmission(customerName, customerPhone) {
+  validateForSubmission(customerName = "") {
     const errors = [];
     const trimmedName = (customerName || "").trim().replace(/\s+/g, " ");
-    const compactPhone = (customerPhone || "").trim().replace(/[\s\-()]/g, "");
 
-    if (!trimmedName) {
-      errors.push("Please enter your full name.");
-    }
-    if (!/^\+?[0-9]{10,15}$/.test(compactPhone)) {
-      errors.push("Please enter a valid 10 to 15 digit phone number.");
-    }
-    if (this.selectedDates.size === 0) {
-      errors.push("Please select at least 1 date from the calendar.");
+    if (this.selectedOfferings.size === 0) {
+      errors.push("Please select at least 1 Mass timing from your chosen date(s).");
     }
 
-    const entries = this.getSortedSelectedEntries();
+    const offerings = this.getSortedOfferings();
     const items = [];
-    for (const entry of entries) {
-      const cleanedItem = (entry.item_text || "").trim().replace(/\s+/g, " ");
-      if (!cleanedItem) {
-        errors.push(`Please enter an item name for ${formatDateHuman(entry.service_date)}.`);
-      } else if (cleanedItem.length > MAX_ITEM_TEXT_LENGTH) {
+    for (const entry of offerings) {
+      const cleaned = (entry.intention_text || "").trim().replace(/\s+/g, " ");
+      if (!cleaned) {
         errors.push(
-          `Item text for ${formatDateHuman(entry.service_date)} must be ${MAX_ITEM_TEXT_LENGTH} characters or fewer.`
+          `Please enter a Mass intention for ${formatDateHuman(entry.service_date)} (${entry.mass_label}).`
+        );
+      } else if (cleaned.length > MAX_INTENTION_LENGTH) {
+        errors.push(
+          `Intention for ${formatDateHuman(entry.service_date)} (${entry.mass_label}) must be ${MAX_INTENTION_LENGTH} characters or fewer.`
         );
       } else {
         items.push({
           service_date: entry.service_date,
-          item_text: cleanedItem,
+          mass_label: entry.mass_label,
+          intention_text: cleaned,
         });
       }
     }
@@ -196,8 +337,7 @@ export class CalendarBookingState {
       payload:
         errors.length === 0
           ? {
-              customer_name: trimmedName,
-              customer_phone: compactPhone,
+              customer_name: trimmedName || null,
               items,
             }
           : null,

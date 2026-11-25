@@ -2,11 +2,14 @@ import { CONFIG } from "../config.js";
 import {
   mockConfirmPayment,
   mockCreateBooking,
+  mockDeleteOverride,
   mockExportCsv,
   mockGetAdminSchedule,
   mockGetBookingStatus,
   mockGetCalendarWindow,
+  mockGetPaymentTally,
   mockHealth,
+  mockUpsertOverride,
 } from "./mock-api.js";
 
 async function requestJson(path, options = {}) {
@@ -60,6 +63,13 @@ export const apiClient = {
     });
   },
 
+  async verifyRazorpayPayment(payload) {
+    return requestJson("/api/bookings/verify-payment", {
+      method: "POST",
+      body: JSON.stringify(payload),
+    });
+  },
+
   async confirmFakePayment(bookingId) {
     if (CONFIG.USE_MOCK_API) {
       return mockConfirmPayment(bookingId);
@@ -68,10 +78,6 @@ export const apiClient = {
       `/api/bookings/${encodeURIComponent(bookingId)}/confirm-fake`,
       { method: "POST" }
     );
-  },
-
-  async confirmMockPayment(bookingId) {
-    return this.confirmFakePayment(bookingId);
   },
 
   async getBookingStatus(bookingId) {
@@ -88,6 +94,27 @@ export const apiClient = {
     if (endDate) params.set("end_date", endDate);
     const qs = params.toString() ? `?${params.toString()}` : "";
     return requestJson(`/api/admin/schedule-by-date${qs}`, { method: "GET" });
+  },
+
+  async getPaymentTally(tallyDate = "") {
+    if (CONFIG.USE_MOCK_API) return mockGetPaymentTally(tallyDate);
+    const qs = tallyDate ? `?tally_date=${encodeURIComponent(tallyDate)}` : "";
+    return requestJson(`/api/admin/payment-tally${qs}`, { method: "GET" });
+  },
+
+  async upsertDateOverride(payload) {
+    if (CONFIG.USE_MOCK_API) return mockUpsertOverride(payload);
+    return requestJson("/api/admin/overrides", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
+  },
+
+  async deleteDateOverride(serviceDate) {
+    if (CONFIG.USE_MOCK_API) return mockDeleteOverride(serviceDate);
+    return requestJson(`/api/admin/overrides/${encodeURIComponent(serviceDate)}`, {
+      method: "DELETE",
+    });
   },
 
   async downloadAdminCsv(startDate = "", endDate = "") {

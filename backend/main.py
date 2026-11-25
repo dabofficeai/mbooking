@@ -4,14 +4,20 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from config import get_settings
-from database import Base, engine
+from database import Base, SessionLocal, engine
 from models import booking as _booking_models  # noqa: F401 - register ORM models
+from repositories.booking_repo import BookingRepository
 from routers import admin_routes, public_routes, webhook_routes
 
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
     Base.metadata.create_all(bind=engine)
+    db = SessionLocal()
+    try:
+        BookingRepository(db).ensure_default_mass_rules_seeded()
+    finally:
+        db.close()
     yield
 
 
@@ -19,7 +25,7 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(
         title=settings.APP_NAME,
-        version="1.0.0",
+        version="2.0.0",
         lifespan=lifespan,
     )
 

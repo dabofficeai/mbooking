@@ -7,8 +7,10 @@ import {
   mockGetAdminSchedule,
   mockGetBookingStatus,
   mockGetCalendarWindow,
+  mockGetDefaultRules,
   mockGetPaymentTally,
   mockHealth,
+  mockUpsertDefaultRules,
   mockUpsertOverride,
 } from "./mock-api.js";
 
@@ -100,6 +102,19 @@ export const apiClient = {
     if (CONFIG.USE_MOCK_API) return mockGetPaymentTally(tallyDate);
     const qs = tallyDate ? `?tally_date=${encodeURIComponent(tallyDate)}` : "";
     return requestJson(`/api/admin/payment-tally${qs}`, { method: "GET" });
+  },
+
+  async getDefaultRules() {
+    if (CONFIG.USE_MOCK_API) return mockGetDefaultRules();
+    return requestJson("/api/admin/default-rules", { method: "GET" });
+  },
+
+  async upsertDefaultRules(payload) {
+    if (CONFIG.USE_MOCK_API) return mockUpsertDefaultRules(payload);
+    return requestJson("/api/admin/default-rules", {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    });
   },
 
   async upsertDateOverride(payload) {

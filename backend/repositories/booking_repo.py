@@ -56,6 +56,16 @@ class BookingRepository:
         )
         return list(self.db.execute(stmt).scalars().all())
 
+    def replace_default_rules(
+        self, day_type: str, rules: list[MassDefaultRule]
+    ) -> list[MassDefaultRule]:
+        self.db.execute(
+            delete(MassDefaultRule).where(MassDefaultRule.day_type == day_type)
+        )
+        self.db.add_all(rules)
+        self.db.commit()
+        return self.get_active_default_rules()
+
     def get_overrides_in_range(
         self, start_date: date, end_date: date
     ) -> list[MassDateOverride]:

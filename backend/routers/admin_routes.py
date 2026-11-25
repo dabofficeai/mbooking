@@ -8,8 +8,10 @@ from routers.dependencies import get_booking_service
 from schemas.booking_schema import (
     AdminScheduleResponse,
     CalendarDaySchedule,
+    DefaultRuleItemResponse,
     PaymentTallyResponse,
     UpsertDateOverrideRequest,
+    UpsertDefaultRulesRequest,
 )
 from services.booking_service import BookingService
 
@@ -53,6 +55,21 @@ def get_payment_tally(
     service: BookingService = Depends(get_booking_service),
 ) -> PaymentTallyResponse:
     return service.get_payment_tally(tally_date=tally_date)
+
+
+@router.get("/default-rules", response_model=list[DefaultRuleItemResponse])
+def get_default_rules(
+    service: BookingService = Depends(get_booking_service),
+) -> list[DefaultRuleItemResponse]:
+    return service.get_default_rules()
+
+
+@router.put("/default-rules", response_model=list[DefaultRuleItemResponse])
+def upsert_default_rules(
+    payload: UpsertDefaultRulesRequest,
+    service: BookingService = Depends(get_booking_service),
+) -> list[DefaultRuleItemResponse]:
+    return service.upsert_default_rules(payload)
 
 
 @router.put("/overrides", response_model=CalendarDaySchedule)

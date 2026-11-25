@@ -12,6 +12,10 @@ const els = {
   logsBody: document.getElementById("payment-logs-body"),
   scheduleContainer: document.getElementById("schedule-container"),
   errorBox: document.getElementById("admin-error-box"),
+  defDayType: document.getElementById("def-day-type"),
+  defMasses: document.getElementById("def-masses"),
+  defSaveBtn: document.getElementById("def-save-btn"),
+  defStatus: document.getElementById("def-status"),
   ovDate: document.getElementById("ov-date"),
   ovOccasion: document.getElementById("ov-occasion"),
   ovMasses: document.getElementById("ov-masses"),
@@ -19,6 +23,8 @@ const els = {
   ovDeleteBtn: document.getElementById("ov-delete-btn"),
   ovStatus: document.getElementById("ov-status"),
 };
+
+let cachedDefaultRules = [];
 
 function escapeHtml(str) {
   return String(str)
@@ -186,22 +192,69 @@ function renderTally(tally) {
     .join("");
 }
 
+function populateDefaultRulesEditor() {
+  const selectedType = els.defDayType.value;
+  const rows = cachedDefaultRules
+    .filter((r) => r.day_type === selectedType)
+    .sort((a, b) => a.sort_order - b.sort_order);
+  els.defMasses.value = rows
+    .map((r) => `${r.mass_time} | ${r.language}`)
+    .join("\n");
+}
+
 async function loadAllAdminData() {
   els.errorBox.classList.add("hidden");
   els.scheduleContainer.innerHTML =
     '<p class="text-sm text-slate-500">Loading day-wise & mass-wise schedule...</p>';
 
   try {
-    const [schedule, tally] = await Promise.all([
+    const [schedule, tally, defaultRules] = await Promise.all([
       apiClient.getAdminSchedule(els.startDateInput.value, els.endDateInput.value),
       apiClient.getPaymentTally(els.startDateInput.value),
+      apiClient.getDefaultRules(),
     ]);
     renderSchedule(schedule);
     renderTally(tally);
+    cachedDefaultRules = defaultRules || [];
+    populateDefaultRulesEditor();
   } catch (err) {
     els.errorBox.textContent = err.message || "Failed to load admin dashboard.";
     els.errorBox.classList.remove("hidden");
     els.scheduleContainer.innerHTML = "";
+  }
+}
+
+async function handleSaveDefaultRules() {
+  els.defStatus.textContent = "";
+  const dayType = els.defDayType.value;
+  const lines = els.defMasses.value
+    .split("\n")
+    .map((l) => l.trim())
+    .filter(Boolean);
+
+  if (lines.length === 0) {
+    els.defStatus.textContent = "Enter at least 1 Mass line (e.g. 06:00 AM | Telugu).";
+    return;
+  }
+
+  const masses = lines.map((line, idx) => {
+    const [timePart, langPart] = line.split("|").map((s) => s.trim());
+    return {
+      mass_time: timePart || "06:00 AM",
+      language: langPart || "English",
+      sort_order: idx + 1,
+    };
+  });
+
+  try {
+    cachedDefaultRules = await apiClient.upsertDefaultRules({
+      day_type: dayType,
+      masses,
+    });
+    populateDefaultRulesEditor();
+    els.defStatus.textContent = `Saved ${masses.length} default ${dayType} Mass(es) for all future dates.`;
+  } catch (err) {
+    els.defStatus.textContent = err.message || "Failed to save default rules.";
   }
 }
 
@@ -282,6 +335,8 @@ function init() {
   els.refreshBtn.addEventListener("click", loadAllAdminData);
   els.printBtn.addEventListener("click", () => window.print());
   els.csvBtn.addEventListener("click", handleDownloadCsv);
+  els.defDayType.addEventListener("change", populateDefaultRulesEditor);
+  els.defSaveBtn.addEventListener("click", handleSaveDefaultRules);
   els.ovSaveBtn.addEventListener("click", handleSaveOverride);
   els.ovDeleteBtn.addEventListener("click", handleDeleteOverride);
   loadAllAdminData();

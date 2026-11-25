@@ -14,6 +14,7 @@ from models.booking import (
     BookingItem,
     BookingStatus,
     MassDateOverride,
+    MassDefaultRule,
     PaymentLog,
 )
 from repositories.booking_repo import BookingRepository
@@ -28,10 +29,12 @@ from schemas.booking_schema import (
     CalendarWindowResponse,
     CreateBookingRequest,
     CreateBookingResponse,
+    DefaultRuleItemResponse,
     MassSlotInfo,
     PaymentLogItem,
     PaymentTallyResponse,
     UpsertDateOverrideRequest,
+    UpsertDefaultRulesRequest,
     VerifyPaymentRequest,
 )
 
@@ -365,7 +368,6 @@ class BookingService:
             start_date=start_date, end_date=end_date
         )
 
-        # Group day-wise -> mass-wise
         by_date: dict[date, dict[str, list[tuple[BookingItem, Booking]]]] = defaultdict(
             lambda: defaultdict(list)
         )
@@ -497,6 +499,28 @@ class BookingService:
             failed_amount_paise=sum(b.total_amount_paise for b in failed),
             recent_logs=[PaymentLogItem.model_validate(l) for l in recent_logs],
         )
+
+    def get_default_rules(self) -> list[DefaultRuleItemResponse]:
+        self.repo.ensure_default_mass_rules_seeded()
+        rules = self.repo.get_active_default_rules()
+        return [DefaultRuleItemResponse.model_validate(r) for r in rules]
+
+    def upsert_default_rules(
+        self, payload: UpsertDefaultRulesRequest
+    ) -> list[DefaultRuleItemResponse]:
+        new_rules = [
+            MassDefaultRule(
+                day_type=payload.day_type,
+                mass_time=m.mass_time.strip(),
+                language=m.language.strip(),
+                sort_order=m.sort_order,
+                amount_paise=m.amount_paise,
+                is_active=True,
+            )
+            for m in payload.masses
+        ]
+        updated = self.repo.replace_default_rules(payload.day_type, new_rules)
+        return [DefaultRuleItemResponse.model_validate(r) for r in updated]
 
     def upsert_date_override(
         self, payload: UpsertDateOverrideRequest

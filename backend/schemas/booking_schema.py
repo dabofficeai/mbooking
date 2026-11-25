@@ -1,6 +1,6 @@
 import re
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -202,4 +202,20 @@ class MassRuleInput(BaseModel):
 class UpsertDateOverrideRequest(BaseModel):
     service_date: date
     occasion_label: str = Field(default="Feast Day", min_length=1, max_length=80)
+    masses: list[MassRuleInput] = Field(..., min_length=1, max_length=20)
+
+
+class DefaultRuleItemResponse(BaseModel):
+    id: str
+    day_type: str
+    mass_time: str
+    language: str
+    sort_order: int
+    amount_paise: Optional[int] = None
+
+    model_config = ConfigDict(from_attributes=True)
+
+
+class UpsertDefaultRulesRequest(BaseModel):
+    day_type: Literal["WEEKDAY", "SUNDAY"]
     masses: list[MassRuleInput] = Field(..., min_length=1, max_length=20)

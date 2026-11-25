@@ -11,18 +11,29 @@ import {
 
 const STORAGE_KEY = "mass_booking_mock_db_v2";
 
+function defaultRulesSeed() {
+  return [
+    { id: "def-wd-1", day_type: "WEEKDAY", mass_time: "06:00 AM", language: "Telugu", sort_order: 1, amount_paise: null },
+    { id: "def-wd-2", day_type: "WEEKDAY", mass_time: "06:00 PM", language: "English", sort_order: 2, amount_paise: null },
+    { id: "def-su-1", day_type: "SUNDAY", mass_time: "06:00 AM", language: "Telugu", sort_order: 1, amount_paise: null },
+    { id: "def-su-2", day_type: "SUNDAY", mass_time: "07:00 AM", language: "English", sort_order: 2, amount_paise: null },
+    { id: "def-su-3", day_type: "SUNDAY", mass_time: "06:00 PM", language: "English", sort_order: 3, amount_paise: null },
+  ];
+}
+
 function loadStore() {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { bookings: [], overrides: {}, logs: [] };
+    if (!raw) return { bookings: [], overrides: {}, logs: [], defaultRules: defaultRulesSeed() };
     const parsed = JSON.parse(raw);
     return {
       bookings: parsed.bookings || [],
       overrides: parsed.overrides || {},
       logs: parsed.logs || [],
+      defaultRules: parsed.defaultRules || defaultRulesSeed(),
     };
   } catch {
-    return { bookings: [], overrides: {}, logs: [] };
+    return { bookings: [], overrides: {}, logs: [], defaultRules: defaultRulesSeed() };
   }
 }
 
@@ -41,6 +52,27 @@ export async function mockHealth() {
 export async function mockGetCalendarWindow() {
   const start = getIstTodayIso();
   const store = loadStore();
+  const weekdayMasses = store.defaultRules
+    .filter((r) => r.day_type === "WEEKDAY")
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((r) => ({
+      mass_time: r.mass_time,
+      language: r.language,
+      mass_label: `${r.mass_time} (${r.language})`,
+      amount_paise: r.amount_paise || PRICE_PER_MASS_PAISE,
+      sort_order: r.sort_order,
+    }));
+  const sundayMasses = store.defaultRules
+    .filter((r) => r.day_type === "SUNDAY")
+    .sort((a, b) => a.sort_order - b.sort_order)
+    .map((r) => ({
+      mass_time: r.mass_time,
+      language: r.language,
+      mass_label: `${r.mass_time} (${r.language})`,
+      amount_paise: r.amount_paise || PRICE_PER_MASS_PAISE,
+      sort_order: r.sort_order,
+    }));
+
   const schedule = buildDefaultSchedule(start, WINDOW_DAYS).map((day) => {
     const ov = store.overrides[day.service_date];
     if (ov) {
@@ -57,7 +89,10 @@ export async function mockGetCalendarWindow() {
         })),
       };
     }
-    return day;
+    return {
+      ...day,
+      masses: (day.is_sunday ? sundayMasses : weekdayMasses).map((m) => ({ ...m })),
+    };
   });
 
   return {
@@ -244,6 +279,27 @@ export async function mockGetPaymentTally() {
     failed_amount_paise: failed.reduce((s, b) => s + b.total_amount_paise, 0),
     recent_logs: store.logs.slice(0, 40),
   };
+}
+
+export async function mockGetDefaultRules() {
+  const store = loadStore();
+  return store.defaultRules;
+}
+
+export async function mockUpsertDefaultRules(payload) {
+  const store = loadStore();
+  const others = store.defaultRules.filter((r) => r.day_type !== payload.day_type);
+  const replaced = payload.masses.map((m, idx) => ({
+    id: randomId("def"),
+    day_type: payload.day_type,
+    mass_time: m.mass_time,
+    language: m.language,
+    sort_order: m.sort_order || idx + 1,
+    amount_paise: m.amount_paise || null,
+  }));
+  store.defaultRules = [...others, ...replaced];
+  saveStore(store);
+  return store.defaultRules;
 }
 
 export async function mockUpsertOverride(payload) {
